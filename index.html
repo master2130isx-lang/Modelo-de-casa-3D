@@ -91,6 +91,11 @@ ol.sup li{padding-left:2px}
 .infobtns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .infobtns button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;font:600 13px/1.25 var(--body);color:var(--fg);background:var(--chip);border:1px solid var(--line);border-radius:8px;padding:10px 12px;cursor:pointer;transition:border-color .15s,background-color .15s}
 .infobtns button small{font-weight:400;font-size:11.5px;color:var(--muted)}
+.infobtns button.wide{grid-column:1/-1;border-color:var(--accent)}
+.pdfvers{display:flex;flex-wrap:wrap;gap:6px 18px;margin:0;padding:10px 12px 12px;border:1px solid var(--line);border-radius:8px}
+.pdfvers legend{padding:0 4px;font-size:12px;color:var(--muted)}
+.pdfvers label,.pdfopt{display:flex;align-items:center;gap:7px;font-size:14px}
+.pdfvers input,.pdfopt input{width:17px;height:17px;accent-color:var(--accent);margin:0}
 @media (hover:hover){.infobtns button:hover{border-color:var(--accent);background:var(--accent-soft)}}
 .infobtns button:active{transform:scale(.98)}
 .acts{display:flex;gap:6px;flex-wrap:wrap}
@@ -244,6 +249,7 @@ dialog.info[open]{display:flex;flex-direction:column}
       <button data-info="i-datos">Datos de la casa<small>Terreno, áreas y medidas</small></button>
       <button data-info="i-espacios">Espacios<small>Áreas de cada cuarto</small></button>
       <button data-info="i-notas">Supuestos y notas<small>De dónde salen las medidas</small></button>
+      <button data-info="i-pdf" class="wide">Descargar PDF<small>Vistas, fases y áreas para el herrero o el arquitecto</small></button>
     </div>
 
     <div>
@@ -319,6 +325,17 @@ dialog.info[open]{display:flex;flex-direction:column}
         <li>Puertas de <span class="mono">0.90 × 2.10</span>. Las ventanas que no se ven en fotos están donde parecen lógicas.</li>
       </ol>
       <p class="note">En el modo Recorrido, el botón <b>Calle</b> te deja recién entrado por el portón, al pie de la escalera nueva. El plan por fases con presupuesto aproximado está aparte. Los muebles son una referencia para ver cómo cabe todo. La camioneta es una Colorado 2026 Z71 a escala real (<span class="mono">5.42 × 1.94 m</span>, <span class="mono">2.14 m</span> con espejos) y el sedán un Versa (<span class="mono">4.50 × 1.74 m</span>). Con la escalera lateral los dos caben con el portón cerrado, entrando de reversa. Con el portón de hoy (<span class="mono">2.95 m</span>) los espejos de la camioneta pegan con el muro del medidor; con el portón de <span class="mono">3.60 m</span>, al salir quedan unos <span class="mono">27 cm</span> libres del lado de la puerta peatonal (al espejo) y unos <span class="mono">70 cm</span> del lado del poste: la camioneta va recorrida hacia la puerta peatonal para librar la escalera. Con la camioneta adentro quedan unos <span class="mono">50 cm</span> hasta el portón; como sus hojas abren de par en par hacia afuera, sale sin problema. El poste de luz está en la banqueta frente al pilar poniente del portón: la hoja poniente pasa muy justa junto a él al abrir hacia afuera, así que conviene medirlo.</p>
+    </section>
+    <section id="i-pdf" data-title="Descargar PDF" hidden>
+      <p class="optnote">Se arma un PDF tamaño carta, horizontal, con las vistas del modelo tal como lo tienes ahora (vehículo, muebles, capas y resaltado). Por cada versión van una vista 3D grande y una hoja con la calle, el patio y las dos plantas. Al final van las fases, los datos de la casa, las áreas y las notas.</p>
+      <fieldset class="pdfvers"><legend>Versiones</legend>
+        <label><input type="checkbox" name="pdf-ver" value="hoy" checked> Hoy</label>
+        <label><input type="checkbox" name="pdf-ver" value="f1" checked> Fase 1</label>
+        <label><input type="checkbox" name="pdf-ver" value="prop" checked> Final</label>
+      </fieldset>
+      <label class="pdfopt"><input type="checkbox" id="pdf-txt" checked> Incluir fases, datos, áreas y notas</label>
+      <div class="acts"><button id="pdf-go" class="pri">Crear PDF</button></div>
+      <p class="optnote" id="pdf-st" role="status" aria-live="polite"></p>
     </section>
   </div>
 </dialog>
@@ -2265,10 +2282,256 @@ const MOTION = (function(){
     if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', '');
     dlg.querySelector('.dlg-body').scrollTop = 0;
   }));
-  document.getElementById('info-x').addEventListener('click', ()=> dlg.close());
-  dlg.addEventListener('click', e=>{ if (e.target === dlg) dlg.close(); });
+  document.getElementById('info-x').addEventListener('click', ()=>{ if (!PDF_BUSY) dlg.close(); });
+  dlg.addEventListener('click', e=>{ if (e.target === dlg && !PDF_BUSY) dlg.close(); });
+  dlg.addEventListener('cancel', e=>{ if (PDF_BUSY) e.preventDefault(); }); // mientras se arma el PDF el diálogo no se cierra
+})();
+// ---------- PDF: vistas del modelo y fichas en tamaño carta horizontal; sin librerías: cada página es una imagen JPEG dentro de un PDF mínimo ----------
+let PDF_BUSY = false;
+(function(){
+  const go = document.getElementById('pdf-go'), st = document.getElementById('pdf-st');
+  const PW = 1650, PH = 1275, M = 60; // carta horizontal (11 × 8.5 in) a 150 puntos por pulgada, margen de 0.4 in
+  const NAME = {hoy:'Hoy', f1:'Fase 1', prop:'Final'};
+  const LEAD = {hoy:'Cómo está la casa hoy, según el avalúo y las fotos.',
+    f1:'Lo indispensable para rentar arriba: escalera lateral, pasillo metálico, puerta del salón y portón de 3.60 m.',
+    prop:'Cómo queda al terminar las fases modeladas (la 2 y la 5 solo están en dibujos).'};
+  const INK = '#1c2730', MUTED = '#5d6a72', OCHRE = '#b8862a', LINE = '#d3d8d6';
+  const FD = '"Archivo","Arial Narrow",system-ui,sans-serif', FB = '"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif', FM = '"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace';
+  const EYEBROW = document.querySelector('.panel .eyebrow').textContent.trim().toUpperCase();
+  const wait = ()=> new Promise(r=> setTimeout(r, 30));
+  const rr = (g, x, y, w, h, r)=>{ g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); };
+  let fecha = '', lastUrl = null;
+
+  // etiqueta 3D pintada en la imagen con el mismo estilo que en pantalla (siempre en tema claro)
+  function drawLabel(g, L){
+    const el = L.el, cl = el.classList, sm = el.querySelector('small');
+    const main = [...el.childNodes].filter(n=> n.nodeType === 3 || (n.nodeType === 1 && n.tagName !== 'SMALL')).map(n=> n.textContent).join('').trim();
+    const sub = sm ? sm.textContent.trim() : '';
+    const ext = cl.contains('ext'), ctx = cl.contains('ctx'), nw = cl.contains('new'), dark = ext || ctx;
+    const fs = parseFloat(getComputedStyle(el).fontSize) || 12, ss = sm ? parseFloat(getComputedStyle(sm).fontSize) || 10.5 : 0;
+    const fMain = `${ctx ? 500 : 600} ${fs}px ${FD}`, fSub = `400 ${ss}px ${FM}`, dot = nw ? 13 : 0;
+    g.font = fMain; const wMain = g.measureText(main).width + dot;
+    g.font = fSub; const wSub = sub ? g.measureText(sub).width : 0;
+    const bw = Math.max(wMain, wSub) + 16, bh = fs*1.25 + (sub ? ss*1.25 : 0) + 6, x = L.sx - bw/2, y = L.sy - bh/2;
+    g.globalAlpha = L.op;
+    rr(g, x, y, bw, bh, 5); g.fillStyle = ctx ? 'rgba(22,32,40,.62)' : ext ? 'rgba(22,32,40,.84)' : 'rgba(255,255,255,.94)'; g.fill();
+    g.lineWidth = nw ? 2 : 1; g.strokeStyle = nw ? OCHRE : dark ? 'rgba(255,255,255,.12)' : 'rgba(28,39,48,.16)'; g.stroke();
+    g.textBaseline = 'middle'; g.textAlign = 'left';
+    const cy = y + 3 + fs*0.625, tx = L.sx - wMain/2;
+    if (nw){ g.fillStyle = OCHRE; g.beginPath(); g.arc(tx + 3.5, cy, 3.5, 0, 2*Math.PI); g.fill(); }
+    g.font = fMain; g.fillStyle = dark ? '#fff' : INK; g.fillText(main, tx + dot, cy);
+    if (sub){ g.font = fSub; g.fillStyle = ext ? '#d6dde2' : ctx ? '#c9d1d6' : '#4a5a64'; g.textAlign = 'center'; g.fillText(sub, L.sx, y + 3 + fs*1.25 + ss*0.625); }
+    g.globalAlpha = 1;
+  }
+  // una vista: versión, modo y cámara al instante; se dibuja a la medida pedida y encima van las etiquetas que caben
+  function shot(v, m, k, w, h, pr){
+    if (VER !== v) setVer(v);
+    if (mode !== m) setMode(m, true);
+    FX.finishAll();
+    GATE.sets.hoy.visible = G.bardas.visible && v === 'hoy'; GATE.sets.nw.visible = G.bardas.visible && v !== 'hoy';
+    renderer.setPixelRatio(pr); renderer.setSize(w, h, false); camera.aspect = w/h; camera.updateProjectionMatrix(); VW = w; VH = h; UI_RECTS = [];
+    const P = viewPose(k); camera.position.copy(P.p); controls.target.copy(P.t); controls.update();
+    renderer.shadowMap.needsUpdate = true; OCC = null;
+    sky.position.copy(camera.position);
+    const fd = camera.position.distanceTo(controls.target);
+    scene.fog.far = Math.min(490, 210 + fd*2.4); scene.fog.near = Math.min(scene.fog.far - 120, 45 + fd*1.25);
+    renderer.render(scene, camera);
+    const c = document.createElement('canvas'); c.width = Math.round(w*pr); c.height = Math.round(h*pr);
+    const g = c.getContext('2d'); g.drawImage(canvas, 0, 0, c.width, c.height); // en la misma tarea que el render: el lienzo aún tiene el cuadro
+    updateLabels();
+    g.save(); g.scale(pr, pr); labels.forEach(L=>{ if (L.vis) drawLabel(g, L); }); g.restore();
+    return c;
+  }
+  function page(){ const c = document.createElement('canvas'); c.width = PW; c.height = PH; const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, PW, PH); return {c, g}; }
+  function header(g, title, ver, lead){
+    g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+    g.fillStyle = MUTED; g.font = `500 16px ${FB}`; g.fillText(EYEBROW, M, M + 12);
+    g.fillStyle = INK; g.font = `700 38px ${FD}`; g.fillText(title, M, M + 56);
+    if (ver){
+      const x = M + g.measureText(title).width + 16, hoy = ver === 'hoy';
+      g.font = `600 17px ${FB}`; const w = g.measureText(NAME[ver]).width + 26;
+      rr(g, x, M + 30, w, 32, 16); g.fillStyle = hoy ? '#e6e9ea' : '#f6eedd'; g.fill(); g.lineWidth = 1.5; g.strokeStyle = hoy ? '#b9c1c5' : OCHRE; g.stroke();
+      g.fillStyle = hoy ? '#3d4a52' : '#6e4f12'; g.fillText(NAME[ver], x + 13, M + 52);
+    }
+    let y = M + 76;
+    if (lead){ g.fillStyle = MUTED; g.font = `400 18px ${FB}`; g.fillText(lead, M, y + 10); y += 30; }
+    g.strokeStyle = LINE; g.lineWidth = 2; g.beginPath(); g.moveTo(M, y); g.lineTo(PW - M, y); g.stroke();
+    return y + 22;
+  }
+  function frame(g, x, y, w, h){ g.strokeStyle = LINE; g.lineWidth = 2; g.strokeRect(x, y, w, h); }
+  const BOTTOM = PH - M - 44;
+  function bigPage(v){
+    const P = page(), y = header(P.g, 'Vista 3D', v, LEAD[v]), w = PW - 2*M, h = BOTTOM - y;
+    P.g.drawImage(shot(v, 'ext', 'iso', Math.round(w/1.5), Math.round(h/1.5), 1.5), M, y, w, h); frame(P.g, M, y, w, h);
+    return P.c;
+  }
+  const TILES = [['ext','calle','Desde la calle'], ['ext','fondo','Desde el patio'], ['pb','planta','Planta baja'], ['pa','planta','Planta alta']];
+  function tilesPage(v){
+    const P = page(), g = P.g, y0 = header(g, 'Más vistas', v), gap = 28, cap = 32, w = (PW - 2*M - gap)/2, h = (BOTTOM - y0 - gap)/2 - cap;
+    TILES.forEach(([m, k, t], i)=>{
+      const x = M + (i % 2)*(w + gap), y = y0 + Math.floor(i/2)*(h + cap + gap);
+      g.fillStyle = INK; g.font = `600 19px ${FB}`; g.textAlign = 'left'; g.textBaseline = 'alphabetic'; g.fillText(t, x, y + 21);
+      g.drawImage(shot(v, m, k, Math.round(w/1.25), Math.round(h/1.25), 1.25), x, y + cap, w, h); frame(g, x, y + cap, w, h);
+    });
+    return P.c;
+  }
+
+  // ---- texto: se toma de los mismos diálogos de la página y se acomoda a dos columnas ----
+  const fontOf = (s, size)=> s.m ? `400 ${size*0.92}px ${FM}` : `${s.b ? 600 : 400} ${size}px ${FB}`;
+  function segsOf(node, s){ const out = []; node.childNodes.forEach(n=>{
+    if (n.nodeType === 3) out.push({t:n.textContent, b:s.b, m:s.m});
+    else if (n.nodeType === 1 && !/^(UL|OL)$/.test(n.tagName)) out.push(...segsOf(n, {b:s.b || n.tagName === 'B', m:s.m || n.classList.contains('mono')})); }); return out; }
+  function wrap(g, segs, w, size){
+    const words = [];
+    segs.forEach(s=>{ const parts = s.t.replace(/\s+/g, ' ').split(' '); parts.forEach((t, i)=>{ const sp = i < parts.length - 1; if (t || sp) words.push({t: t + (sp ? ' ' : ''), b:s.b, m:s.m}); }); });
+    const lines = [[]]; let x = 0;
+    for (const wd of words){
+      g.font = fontOf(wd, size); const ww = g.measureText(wd.t).width, wt = g.measureText(wd.t.trimEnd()).width;
+      if (x + wt > w && lines[lines.length - 1].length){ lines.push([]); x = 0; }
+      if (!x && !wd.t.trim()) continue;
+      lines[lines.length - 1].push(Object.assign({x}, wd)); x += ww;
+    }
+    return lines.filter(l=> l.length);
+  }
+  function flow(title, blocks){
+    const out = [], GAP = 64, colW = (PW - 2*M - GAP)/2, SZ = 17, LH = 26;
+    let P, y0, y, col;
+    const fresh = ()=>{ P = page(); y0 = header(P.g, title); y = y0; col = 0; out.push(P.c); };
+    const need = h=>{ if (y + h <= BOTTOM) return; if (col === 0){ col = 1; y = y0; } else fresh(); };
+    const X = ()=> M + col*(colW + GAP);
+    fresh();
+    for (const bk of blocks){
+      const g = P.g; g.textBaseline = 'alphabetic'; g.textAlign = 'left';
+      if (bk.h){ if (y > y0) y += 10; need(70); P.g.fillStyle = INK; P.g.font = `700 24px ${FD}`; P.g.fillText(bk.h, X(), y + 22); y += 40; continue; }
+      if (bk.sub){ need(60); P.g.fillStyle = MUTED; P.g.font = `600 16px ${FB}`; P.g.fillText(bk.sub.toUpperCase(), X(), y + 18); y += 30; continue; }
+      if (bk.row){
+        need(LH); const gg = P.g, x = X();
+        if (bk.c){ gg.fillStyle = bk.c; gg.fillRect(x, y + 6, 13, 13); }
+        gg.fillStyle = bk.muted ? MUTED : INK; gg.font = `${bk.strong ? 600 : 400} ${SZ}px ${FB}`; gg.fillText(bk.row[0], x + (bk.c ? 22 : 0), y + 18);
+        gg.textAlign = 'right'; gg.font = `${bk.strong ? 600 : 400} ${SZ*0.92}px ${FM}`; gg.fillText(bk.row[1], x + colW, y + 18); gg.textAlign = 'left';
+        gg.strokeStyle = '#eceeed'; gg.lineWidth = 1; gg.beginPath(); gg.moveTo(x, y + LH - 1); gg.lineTo(x + colW, y + LH - 1); gg.stroke();
+        y += LH; if (bk.end) y += 14; continue;
+      }
+      const ind = (bk.lvl || 0)*30, mk = bk.mark ? 30 : 0;
+      const lines = wrap(P.g, bk.segs, colW - ind - mk, SZ);
+      lines.forEach((ln, i)=>{
+        need(LH); const gg = P.g, x = X() + ind;
+        if (i === 0 && bk.mark){ gg.fillStyle = bk.mark === '•' ? MUTED : INK; gg.font = `600 ${SZ}px ${FB}`; gg.fillText(bk.mark, x, y + 18); }
+        ln.forEach(wd=>{ gg.font = fontOf(wd, SZ); gg.fillStyle = INK; gg.fillText(wd.t, x + mk + wd.x, y + 18); });
+        y += LH;
+      });
+      y += bk.gap == null ? 10 : bk.gap;
+    }
+    return out;
+  }
+  function listBlocks(ol){
+    const out = [];
+    [...ol.children].forEach((li, i)=>{
+      let buf = [], first = true;
+      const flush = lvl=>{ if (buf.some(s=> s.t.trim())) out.push({segs:buf, mark: first ? (i + 1) + '.' : '', lvl, gap: 6}); buf = []; first = false; };
+      li.childNodes.forEach(n=>{
+        if (n.nodeType === 1 && /^(UL|OL)$/.test(n.tagName)){ flush(0); [...n.children].forEach(sub=> out.push({segs:segsOf(sub, {}), mark:'•', lvl:1, gap:4})); }
+        else if (n.nodeType === 3) buf.push({t:n.textContent});
+        else if (n.nodeType === 1) buf.push(...segsOf({childNodes:[n]}, {}));
+      });
+      flush(first ? 0 : 1);
+      out[out.length - 1].gap = 14;
+    });
+    return out;
+  }
+  function roomBlocks(v){
+    const paList = v === 'prop' ? roomsProp : v === 'f1' ? roomsF1 : null;
+    const list = paList ? rooms.filter(r=> r.lv === 'pb').concat(paList.map(r=> Object.assign({lv:'pa'}, r))) : rooms;
+    const out = [{h:'Áreas · ' + NAME[v]}];
+    [['pb', 'Planta baja (ya rentada)'], ['pa', v === 'prop' ? 'Departamento de arriba (final)' : v === 'f1' ? 'Departamento de arriba (fase 1)' : 'Planta alta']].forEach(([lv, t])=>{
+      out.push({sub:t}); let sum = 0;
+      list.filter(r=> r.lv === lv).forEach(r=>{ if (!r.extra) sum += r.area; out.push({row:[r.name.replace(/<[^>]*>/g, ''), r.area.toFixed(1) + ' m²'], c:hex(r.c)}); });
+      out.push({row:['Suma en el modelo (sin muros)', sum.toFixed(1) + ' m²'], muted:true, end:true});
+    });
+    return out;
+  }
+  function textPages(vers){
+    const pages = [];
+    pages.push(...flow('Qué cambia en cada fase', listBlocks(document.querySelector('#i-cambios ol.chg'))));
+    const datos = [{h:'Datos de la casa'}];
+    document.querySelectorAll('#i-datos .fig').forEach(f=> datos.push({row:[f.querySelector('span').textContent, f.querySelector('b').textContent], strong:false}));
+    datos[datos.length - 1].end = true;
+    datos.push({segs:segsOf(document.querySelector('#i-datos .optnote'), {}), gap:18});
+    (vers.length ? vers : ['hoy', 'f1', 'prop']).forEach(v=> datos.push(...roomBlocks(v)));
+    pages.push(...flow('Datos y áreas', datos));
+    const notas = listBlocks(document.querySelector('#i-notas ol.sup'));
+    notas.push({segs:segsOf(document.querySelector('#i-notas .note'), {}), gap:10});
+    pages.push(...flow('Supuestos y notas', notas));
+    return pages;
+  }
+  function footer(g, n, N){
+    g.textBaseline = 'alphabetic'; g.fillStyle = MUTED; g.font = `400 14px ${FB}`;
+    g.textAlign = 'left'; g.fillText(`Bravo 308 · remodelación · ${fecha}. Medidas del avalúo del 9 de octubre de 2026; lo demás es aproximado (ver Supuestos y notas).`, M, PH - M + 22);
+    g.textAlign = 'right'; g.fillText(`${n} / ${N}`, PW - M, PH - M + 22);
+  }
+  // PDF mínimo: un objeto de página, uno de contenido y una imagen JPEG por página
+  function pdfBlob(jpgs){
+    const enc = new TextEncoder(), parts = [], offs = []; let len = 0;
+    const add = x=>{ const b = typeof x === 'string' ? enc.encode(x) : x; parts.push(b); len += b.length; };
+    const obj = (n, f)=>{ offs[n] = len; add(`${n} 0 obj\n`); f(); add('\nendobj\n'); };
+    const N = jpgs.length, n = 3 + 3*N, CS = 'q 792 0 0 612 0 0 cm /Im0 Do Q';
+    add('%PDF-1.4\n%âãÏÓ\n');
+    obj(1, ()=> add('<< /Type /Catalog /Pages 2 0 R >>'));
+    obj(2, ()=> add(`<< /Type /Pages /Count ${N} /Kids [${jpgs.map((_, i)=> (3 + 3*i) + ' 0 R').join(' ')}] >>`));
+    jpgs.forEach((j, i)=>{ const o = 3 + 3*i;
+      obj(o, ()=> add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 792 612] /Resources << /XObject << /Im0 ${o + 2} 0 R >> >> /Contents ${o + 1} 0 R >>`));
+      obj(o + 1, ()=> add(`<< /Length ${CS.length} >>\nstream\n${CS}\nendstream`));
+      obj(o + 2, ()=>{ add(`<< /Type /XObject /Subtype /Image /Width ${PW} /Height ${PH} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${j.length} >>\nstream\n`); add(j); add('\nendstream'); });
+    });
+    const xref = len;
+    add(`xref\n0 ${n}\n0000000000 65535 f \n` + offs.slice(1).map(o=> String(o).padStart(10, '0') + ' 00000 n \n').join('') + `trailer\n<< /Size ${n} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+    return new Blob(parts, {type:'application/pdf'});
+  }
+  const jpeg = c=>{ const u = c.toDataURL('image/jpeg', 0.88), s = atob(u.slice(u.indexOf(',') + 1)), a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return a; };
+
+  async function run(){
+    const vers = [...document.querySelectorAll('[name="pdf-ver"]:checked')].map(i=> i.value), txt = document.getElementById('pdf-txt').checked;
+    if (!vers.length && !txt){ st.textContent = 'Elige al menos una versión o las fichas de texto.'; return; }
+    go.disabled = true; st.textContent = 'Preparando…';
+    if (walk.on) walk.exit();
+    if (anim) stepAnim(anim.s + anim.d); // el vuelo en curso (o el regreso del recorrido) llega a su destino antes de guardar la cámara
+    const now = new Date(); fecha = now.toLocaleDateString('es-MX', {day:'numeric', month:'long', year:'numeric'});
+    const keep = {ver:VER, mode, p:camera.position.clone(), t:controls.target.clone(), fov:camera.fov, pr:renderer.getPixelRatio(), reduce:REDUCE};
+    PDF_BUSY = true; REDUCE = true;
+    skyU.top.value.set('#8fb2d2'); skyU.bot.value.set('#e4e9e8'); skyU.gnd.value.set('#e4e9e8'); scene.fog.color.set('#e4e9e8'); renderer.setClearColor('#e4e9e8'); // el PDF va siempre en tema claro
+    const pages = []; let failed = false;
+    try {
+      for (const v of vers){
+        st.textContent = `Dibujando ${NAME[v]}…`; await wait();
+        pages.push(bigPage(v)); await wait();
+        pages.push(tilesPage(v)); await wait();
+      }
+      if (txt){ st.textContent = 'Armando fases, datos y notas…'; await wait(); pages.push(...textPages(vers)); }
+    } catch (e){ console.error(e); failed = true; }
+    finally {
+      if (VER !== keep.ver) setVer(keep.ver);
+      if (mode !== keep.mode) setMode(keep.mode, true);
+      FX.finishAll();
+      camera.position.copy(keep.p); controls.target.copy(keep.t); camera.fov = keep.fov; renderer.setPixelRatio(keep.pr); resize(); controls.update();
+      REDUCE = keep.reduce; PDF_BUSY = false; applyTheme(); markDirty(true);
+    }
+    try {
+      if (failed || !pages.length) throw new Error('sin páginas');
+      st.textContent = 'Guardando…'; await wait();
+      pages.forEach((c, i)=> footer(c.getContext('2d'), i + 1, pages.length));
+      const blob = pdfBlob(pages.map(jpeg));
+      if (lastUrl) URL.revokeObjectURL(lastUrl);
+      const dia = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`; // fecha local, igual que el pie de página
+      const url = lastUrl = URL.createObjectURL(blob), name = `Bravo 308 remodelación ${dia}.pdf`;
+      const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      st.innerHTML = `Listo: ${pages.length} páginas (${(blob.size/1048576).toFixed(1)} MB). Si no se descargó solo, <a href="${url}" target="_blank" rel="noopener" download="${name}">ábrelo aquí</a>.`;
+    } catch (e){ console.error(e); st.textContent = 'No se pudo armar el PDF en este navegador. Prueba con menos versiones o en una computadora.'; }
+    finally { pages.forEach(c=> c.width = 0); go.disabled = false; } // se sueltan los lienzos de las páginas
+  }
+  go.addEventListener('click', run);
 })();
 function tick(){
+  if (PDF_BUSY){ requestAnimationFrame(tick); return; }
   const now = performance.now(), raw = now - lastT, dt = Math.min(0.05, raw/1000); lastT = now;
   let active = false;
   if (walk.on){ walk.update(dt); active = true; }
